@@ -1,0 +1,150 @@
+#########Connecting Google Drive to Google colab########
+
+from google.colab import drive
+drive.mount('/content/gdrive')
+
+#########upload kaggle.json file########
+
+from google.colab import files
+files.upload()
+
+!pip install -q kaggle
+!mkdir -p ~/.kaggle
+!cp kaggle.json ~/.kaggle/
+!ls ~/.kaggle
+!chmod 600 /root/.kaggle/kaggle.json # set permission
+
+#########download iris images for computer vision########
+
+!kaggle datasets download -d jeffheaton/iris-computer-vision -p /content/gdrive/MyDrive/kaggle/iris-computer-vision
+!unzip -q /content/gdrive/MyDrive/kaggle/iris-computer-vision/iris-computer-vision.zip -d /content/gdrive/MyDrive/kaggle/iris-computer-vision
+
+#########data########
+
+import pathlib
+
+data_dir = "/content/gdrive/MyDrive/kaggle/iris-computer-vision"
+data_dir = pathlib.Path(data_dir)
+data_dir
+
+setosa = list(data_dir.glob('iris-setosa/*'))
+versicolour = list(data_dir.glob('iris-versicolour/*'))
+virginica = list(data_dir.glob('iris-virginica/*'))
+
+print("Length of setosa: ", len(setosa))
+print("Length of versicolour: ", len(versicolour))
+print("Length of virginica: ", len(virginica))
+
+df_images = {
+    'setosa' : setosa,
+    'versicolour' : versicolour,
+    'virginica': virginica
+}
+
+df_labels = {
+    'setosa' : 0,
+    'versicolour' : 1,
+    'virginica': 2
+}
+
+#########machine learning + image processing (Canny edages)########
+
+import cv2
+
+X, y = [], []
+for label, images in df_images.items():
+    for image in images:
+
+        img = cv2.imread(str(image), cv2.IMREAD_GRAYSCALE)
+        img = cv2.Canny(img, 100, 200)
+        img = img.flatten()
+
+        X.append(img)
+        y.append(df_labels[label])
+print(len(X), len(y))
+
+import numpy as np
+
+X = np.array(X)
+y = np.array(y)
+
+from sklearn.model_selection import train_test_split
+
+train, test, train_labels, test_labels = train_test_split(X, y, train_size = 0.8)
+
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score
+
+knn = KNeighborsClassifier(n_neighbors = 15)
+
+knn_model = knn.fit(train, train_labels)
+
+pred_knn = knn_model.predict(test)
+
+print("knn model accuracy : " , accuracy_score ( test_labels, pred_knn ) )
+
+#########deep learning########
+
+import cv2
+
+X, y = [], []
+for label, images in df_images.items():
+    for image in images:
+
+        img = cv2.imread(str(image))
+        resized_img = cv2.resize(img, (224, 224))
+
+        X.append(resized_img)
+        y.append(df_labels[label])
+print(len(X), len(y))
+
+import numpy as np
+
+X = np.array(X)
+y = np.array(y)
+
+from sklearn.model_selection import train_test_split
+
+train, test, train_labels, test_labels = train_test_split(X, y, train_size = 0.8)
+test, val, test_labels, val_labels = train_test_split(test, test_labels)
+
+import tensorflow as tf
+from tensorflow import keras
+import tensorflow_hub as hub
+from keras.callbacks import ModelCheckpoint, EarlyStopping
+from keras.utils import to_categorical
+
+normalizer = tf.keras.layers.Rescaling(scale=1/255)
+
+num_label = len(np.unique(y))
+
+train_labels = to_categorical(train_labels, num_label)
+val_labels = to_categorical(val_labels, num_label)
+
+mobile_net = 'https://tfhub.dev/google/tf2-preview/mobilenet_v2/feature_vector/4'
+mobile_net = hub.KerasLayer(mobile_net, input_shape=(224,224, 3), trainable=False)
+
+model = keras.Sequential([
+    keras.Input(shape=(224,224,3)),
+    normalizer,
+    mobile_net,
+    keras.layers.Dropout(0.2),
+    keras.layers.Dense(num_label, activation='softmax')
+])
+
+model.summary()
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+early_stopping = EarlyStopping(monitor='val_loss', mode='min', patience=25, verbose=1)
+
+history = model.fit(train, train_labels, epochs=100, validation_data=(val, val_labels), callbacks=early_stopping)
+
+from sklearn.metrics import accuracy_score
+
+prediction = model.predict(test, batch_size=64, verbose=1)
+prediction = np.argmax(model.predict(test), axis=-1)
+prediction = prediction.flatten()
+prediction
+accuracy = accuracy_score(test_labels, prediction)
+print(accuracy)
